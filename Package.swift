@@ -24,7 +24,7 @@ let package = Package(
         ),
         .package(
           url: "https://github.com/Authada/eEWA-iOS-Jose-Swift.git",
-          branch: "main"
+          exact: "0.2.0"
         )
     ],
     targets: [

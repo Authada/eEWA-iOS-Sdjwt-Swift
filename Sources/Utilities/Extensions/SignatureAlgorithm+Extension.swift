@@ -33,6 +33,6 @@ import JSONWebAlgorithms
 
 extension SigningAlgorithm: CaseIterable {
   public static var allCases: [SigningAlgorithm] {
-      return [.HS256, .HS384, .HS512, .RS256, .RS384, .RS512, .ES256, .ES384, .ES512, .ES256K, .PS256, .PS384, .PS512, .EdDSA]
+      return [.HS256, .HS384, .HS512, .RS256, .RS384, .RS512, .ES256, .ES384, .ES512, .ES256K, .PS256, .PS384, .PS512, .EdDSA, .DVSP256SHA256HS256, .DVSP384SHA256HS256, .DVSP512SHA256HS256]
   }
 }

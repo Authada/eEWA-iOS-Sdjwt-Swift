@@ -189,6 +189,228 @@ public struct SignedSDJWT {
 
     return jwkObject
   }
+
+    
+    static func allDisclosures(from structuredDisclosures:[Disclosure:[Any]], for disclosure:Disclosure) -> Set<Disclosure> {
+        var results :Set<Disclosure>  = []
+        
+        if let disArray = structuredDisclosures[disclosure] {
+            results.insert(disclosure)
+            for element in disArray {
+                
+                if let subDisclosure = element as? Disclosure {
+                    results.insert(subDisclosure)
+                }
+                else if let subStructuredDisclosures = element as? [Disclosure:[Any]] {
+                    
+                    if let allKeys = Array(subStructuredDisclosures.keys) as? [Disclosure] {
+                        for keyDisclosure in allKeys {
+                            let subDisclosures = allDisclosures(from: subStructuredDisclosures, for: keyDisclosure)
+                            results.formUnion(subDisclosures)
+                        }
+                    }
+                }
+            }
+        }
+        
+        return results
+    }
+    
+    static func filterSDJWTDisclosures(_ disclosures:[Disclosure], claimNames:[String], digestCreator:DigestCreator) -> [Disclosure] {
+        
+        var disclosureHashDict :[String:Disclosure] = [:]
+        
+        var claimArrayDisclosureDict : [Disclosure:[Any]] = [:]
+        
+        var disclosureArrayElementsDict :[String:Disclosure] = [:]
+        var disclosureObjectElementsDict :[String:Disclosure] = [:]
+        
+        var disclosureContainingSDElementsDict :[String:Disclosure] = [:]
+        var disclosureContainingDotsElementsDict :[String:Disclosure] = [:]
+        
+        //First Pass to build up usefull data structures
+        for c in disclosures {
+            let hash = digestCreator.hashAndBase64Encode(input: c) ?? "nil"
+            disclosureHashDict[hash] = c
+            
+            let jsonString = c.base64URLDecode() ?? "?"
+                        
+            if let claimArray = JSON(parseJSON: jsonString).arrayObject {
+                claimArrayDisclosureDict[c] = claimArray
+                
+                if claimArray.count == 3 {
+                    //Disclosures for Object Properties
+                    if claimArray[1] is String {
+                        disclosureObjectElementsDict[hash] = c
+                        
+                        let claimValue = claimArray[2]
+                        if let valueDict = claimValue as? Dictionary<AnyHashable,Any> {
+                            if valueDict["_sd"] is [String] {
+                                disclosureContainingSDElementsDict[hash] = c
+                            }
+                        }
+                        if let valueArray = claimValue as? Array<Any> {
+                            for value in valueArray {
+                                if let valueDict = value as? Dictionary<AnyHashable,Any> {
+                                    if valueDict["..."] is String {
+                                        disclosureContainingDotsElementsDict[hash] = c
+                                        break
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                else if claimArray.count == 2 {
+                    //Disclosures for Array Elements
+                    disclosureArrayElementsDict[hash] = c
+                }
+            }
+        }
+        
+        var leafDisclosures = disclosures
+        var structuredDisclosures : [Disclosure:[Any]] = [:]
+        
+        if (disclosureContainingSDElementsDict.count > 0) {
+            var sdDisclosureDict = disclosureContainingSDElementsDict
+            
+            for keyValuePair in sdDisclosureDict {
+                let disclosureWithSD = keyValuePair.value
+                if let index = leafDisclosures.firstIndex(of: disclosureWithSD) {
+                    leafDisclosures.remove(at: index)
+                }
+            }
+            
+            //var missingHashMatches :[Disclosure:[String:Disclosure]] = [:]
+            
+            //Build structuredDisclosures
+            var valuesChoosen = false
+            repeat {
+                
+                valuesChoosen = false
+                for (hash, disclosure) in sdDisclosureDict {
+                    
+                    var chooseValue = true
+                                        
+                    structuredDisclosures[disclosure] = []
+                    
+                    if let claimArray = claimArrayDisclosureDict[disclosure], claimArray.count == 3 {
+                        let claimValue = claimArray[2]
+                        if let valueDict = claimValue as? Dictionary<AnyHashable,Any> {
+                            if let hashValues = valueDict["_sd"] as? [String] {
+                                for hash in hashValues {
+                                    if let disclosureForHash = disclosureHashDict[hash] { //if no disclosureForHash found it is a decoy hash -> ignore
+                                        
+                                        if leafDisclosures.firstIndex(of: disclosureForHash) != nil {
+                                            
+                                            if var subDisclosures = structuredDisclosures[disclosure] {
+                                                subDisclosures.append(disclosureForHash)
+                                                structuredDisclosures[disclosure] = subDisclosures
+                                            }
+                                        }
+                                        else {
+                                            if let match = structuredDisclosures[disclosureForHash] {
+                                                structuredDisclosures.removeValue(forKey: disclosureForHash)
+                                                
+                                                if var subDisclosures = structuredDisclosures[disclosure] {
+                                                    subDisclosures.append([disclosureForHash:match])
+                                                    structuredDisclosures[disclosure] = subDisclosures
+                                                }
+                                            }
+                                            else {
+                                                //kein match
+                                                chooseValue = false
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    
+                    if chooseValue {
+                        sdDisclosureDict.removeValue(forKey: hash)
+                        valuesChoosen = true
+                        break
+                    }
+                }
+            } while (sdDisclosureDict.count > 0 && valuesChoosen)
+        }
+                
+        var disclosuresToPresent :Set<Disclosure> = []
+        
+        //Search final disclosures
+        for claimNameToFind in claimNames {
+            let isTreeStructureClaim = claimNameToFind.contains(".")
+            
+            if (!isTreeStructureClaim) {
+                //First check simple leaf disclosures
+                for c in leafDisclosures {
+                    if let claimArray = claimArrayDisclosureDict[c], claimArray.count == 3, let claimName = claimArray[1] as? String {
+                        if claimName == claimNameToFind {
+                            disclosuresToPresent.insert(c)
+                        }
+                    }
+                }
+                for keyValuePair in structuredDisclosures {
+                    let c = keyValuePair.key
+                    if let claimArray = claimArrayDisclosureDict[c], claimArray.count == 3, let claimName = claimArray[1] as? String {
+                        if claimName == claimNameToFind {
+                            let allRelevantDisclosures = allDisclosures(from: structuredDisclosures, for: c)
+                            disclosuresToPresent.formUnion(allRelevantDisclosures)
+                        }
+                    }
+                }
+            }
+            else {
+                let components = claimNameToFind.components(separatedBy: ".")
+                var currentStructuredDisclosures:[Any] = [structuredDisclosures]
+                
+                for i in 0..<components.count {
+                    let searchClaimName = components[i]
+                                        
+                    for element in currentStructuredDisclosures {
+                        if let disclosure = element as? Disclosure {
+                            if let claimArray = claimArrayDisclosureDict[disclosure], claimArray.count == 3, let claimName = claimArray[1] as? String, claimName == searchClaimName {
+                                //Found disclosure
+                                if i == components.count-1 {
+                                    disclosuresToPresent.insert(disclosure)
+                                }
+                                break
+                            }
+                        }
+                        else if let disclosuresStructured = element as? [Disclosure:[Any]] {
+                            for keyValuePair in disclosuresStructured {
+                                let c = keyValuePair.key
+                                if let claimArray = claimArrayDisclosureDict[c], claimArray.count == 3, let claimName = claimArray[1] as? String, claimName == searchClaimName {
+                                    //Found disclosre structure
+                                    if i == components.count-1 {
+                                        let allMatchingDisclosures = allDisclosures(from: disclosuresStructured, for: c)
+                                        disclosuresToPresent.formUnion(allMatchingDisclosures)
+                                    }
+                                    else {
+                                        currentStructuredDisclosures = keyValuePair.value
+                                        disclosuresToPresent.insert(c)
+                                    }
+                                    break
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        return Array(disclosuresToPresent)
+    }
+    
+  public func filteredDisclosures(with claimNames:[String]) -> [Disclosure]? {
+      if let dCreator = try? self.toSDJWT().extractDigestCreator() {
+          return SignedSDJWT.filterSDJWTDisclosures(disclosures, claimNames: claimNames, digestCreator: dCreator)
+      }
+      return nil
+  }
 }
 
 extension SignedSDJWT {

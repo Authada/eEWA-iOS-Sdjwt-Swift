@@ -14,8 +14,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/Authada/eEWA-iOS-Jose-Swift.git",
       "state" : {
-        "branch" : "main",
-        "revision" : "62251d7a05618319053fc124e45e3c49a963a11b"
+        "revision" : "6fb7fad64a8f9aaf38700c9418fb27442dd00c48",
+        "version" : "0.2.0"
       }
     },
     {
